@@ -48,27 +48,34 @@ const ReviewService_1 = __nccwpck_require__(7053);
 const GitHubService_1 = __nccwpck_require__(7076);
 const DiffService_1 = __nccwpck_require__(1676);
 const fs_1 = __nccwpck_require__(9896);
+const CloudflareAIProvider_1 = __nccwpck_require__(4018);
 async function main() {
     var _a, _b;
     try {
         // Get inputs
-        const provider = core.getInput('AI_PROVIDER');
-        const model = core.getInput('AI_MODEL');
-        const apiKey = core.getInput('AI_API_KEY');
-        const githubToken = core.getInput('GITHUB_TOKEN');
-        const temperature = parseFloat(core.getInput('AI_TEMPERATURE') || '0');
+        const provider = core.getInput("AI_PROVIDER");
+        const model = core.getInput("AI_MODEL");
+        const apiKey = core.getInput("AI_API_KEY");
+        const githubToken = core.getInput("GITHUB_TOKEN");
+        const temperature = parseFloat(core.getInput("AI_TEMPERATURE") || "0");
         // Get new configuration inputs
-        const approveReviews = core.getBooleanInput('APPROVE_REVIEWS');
-        const maxComments = parseInt(core.getInput('MAX_COMMENTS') || '0', 10);
-        const projectContext = core.getInput('PROJECT_CONTEXT');
-        const contextFiles = core.getInput('CONTEXT_FILES').split(',').map(f => f.trim());
-        const excludePatterns = core.getInput('EXCLUDE_PATTERNS');
+        const approveReviews = core.getBooleanInput("APPROVE_REVIEWS");
+        const maxComments = parseInt(core.getInput("MAX_COMMENTS") || "0", 10);
+        const projectContext = core.getInput("PROJECT_CONTEXT");
+        const contextFiles = core
+            .getInput("CONTEXT_FILES")
+            .split(",")
+            .map((f) => f.trim());
+        const excludePatterns = core.getInput("EXCLUDE_PATTERNS");
+        // Get Cloudflare-specific inputs
+        const cloudflareAccountId = core.getInput("CLOUDFLARE_ACCOUNT_ID");
         // Initialize services
         const aiProvider = getProvider(provider);
         await aiProvider.initialize({
             apiKey,
             model,
             temperature,
+            accountId: cloudflareAccountId
         });
         // Initialize services
         const githubService = new GitHubService_1.GitHubService(githubToken);
@@ -91,12 +98,14 @@ async function main() {
 }
 function getProvider(provider) {
     switch (provider.toLowerCase()) {
-        case 'openai':
+        case "openai":
             return new OpenAIProvider_1.OpenAIProvider();
-        case 'anthropic':
+        case "anthropic":
             return new AnthropicProvider_1.AnthropicProvider();
-        case 'google':
+        case "google":
             return new GeminiProvider_1.GeminiProvider();
+        case "cloudflare":
+            return new CloudflareAIProvider_1.CloudflareAIProvider();
         default:
             throw new Error(`Unsupported AI provider: ${provider}`);
     }
@@ -105,11 +114,11 @@ function getPRNumberFromContext() {
     try {
         const eventPath = process.env.GITHUB_EVENT_PATH;
         if (!eventPath) {
-            throw new Error('GITHUB_EVENT_PATH is not set');
+            throw new Error("GITHUB_EVENT_PATH is not set");
         }
-        const { pull_request } = JSON.parse((0, fs_1.readFileSync)(eventPath, 'utf8'));
+        const { pull_request } = JSON.parse((0, fs_1.readFileSync)(eventPath, "utf8"));
         if (!(pull_request === null || pull_request === void 0 ? void 0 : pull_request.number)) {
-            throw new Error('Could not get pull request number from event payload');
+            throw new Error("Could not get pull request number from event payload");
         }
         return pull_request.number;
     }
@@ -117,7 +126,7 @@ function getPRNumberFromContext() {
         throw new Error(`Failed to get PR number: ${error}`);
     }
 }
-main().catch(error => {
+main().catch((error) => {
     core.setFailed(`Unhandled error: ${error.message}`);
 });
 
@@ -394,6 +403,87 @@ class AnthropicProvider {
     }
 }
 exports.AnthropicProvider = AnthropicProvider;
+
+
+/***/ }),
+
+/***/ 4018:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CloudflareAIProvider = void 0;
+class CloudflareAIProvider {
+    constructor() {
+        this.apiKey = "";
+        this.accountId = "";
+        this.model = "";
+        this.temperature = 0.7;
+    }
+    async initialize(config) {
+        var _a;
+        this.apiKey = config.apiKey;
+        this.accountId = config.accountId;
+        this.model = config.model;
+        this.temperature = (_a = config.temperature) !== null && _a !== void 0 ? _a : 0.7;
+    }
+    async review(request) {
+        const prompt = this.buildPrompt(request);
+        const messages = [
+            {
+                role: "system",
+                content: "You are an expert code reviewer. Analyze the code changes and provide detailed feedback."
+            },
+            {
+                role: "user",
+                content: prompt
+            }
+        ];
+        const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.accountId}/ai/run/${this.model}`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${this.apiKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ messages })
+        });
+        if (!response.ok) {
+            throw new Error(`Cloudflare AI API error: ${response.status} ${response.statusText}`);
+        }
+        const result = await response.json();
+        // Parse the AI response and convert it to ReviewResponse format
+        // You'll need to implement proper parsing based on the AI model's output format
+        return this.parseResponse(result);
+    }
+    buildPrompt(request) {
+        // Construct a prompt that includes:
+        // 1. Pull request title and description
+        // 2. Changed files and their diffs
+        // 3. Context files if any
+        // 4. Previous reviews if any
+        let prompt = `Review the following pull request:\n\n`;
+        prompt += `Title: ${request.pullRequest.title}\n`;
+        prompt += `Description: ${request.pullRequest.description}\n\n`;
+        prompt += `Changed files:\n`;
+        for (const file of request.files) {
+            prompt += `\nFile: ${file.path}\n`;
+            prompt += file.diff || file.content;
+        }
+        return prompt;
+    }
+    parseResponse(result) {
+        // Implement parsing logic based on the model's output format
+        // This is a simplified example
+        return {
+            summary: result.result.response,
+            lineComments: [], // Parse specific line comments if the model provides them
+            suggestedAction: "COMMENT", // Determine based on the response
+            confidence: 0.8 // Determine based on the model's confidence signals
+        };
+    }
+}
+exports.CloudflareAIProvider = CloudflareAIProvider;
 
 
 /***/ }),
