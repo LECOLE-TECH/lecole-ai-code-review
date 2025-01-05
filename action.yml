@@ -38,6 +38,9 @@ inputs:
     description: "Files to exclude (glob patterns)"
     required: false
     default: "**/*.lock,**/*.json,**/*.md"
+  CLOUDFLARE_ACCOUNT_ID:
+    description: "Cloudflare account ID for AI API access"
+    required: false
 runs:
   using: "node20"
   main: "dist/index.js"
