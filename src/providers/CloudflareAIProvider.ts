@@ -40,7 +40,7 @@ export class CloudflareAIProvider implements AIProvider {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ messages })
+        body: JSON.stringify({ messages, stream: true })
       }
     );
 
@@ -48,11 +48,27 @@ export class CloudflareAIProvider implements AIProvider {
       throw new Error(`Cloudflare AI API error: ${response.status} ${response.statusText}`);
     }
 
-    const result = await response.json();
+    // Handle streaming response
+    const reader = response.body?.getReader();
+    let fullResponse = "";
 
-    // Parse the AI response and convert it to ReviewResponse format
-    // You'll need to implement proper parsing based on the AI model's output format
-    return this.parseResponse(result);
+    if (reader) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          // Convert the Uint8Array to text
+          const chunk = new TextDecoder().decode(value);
+          fullResponse += chunk;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    // Parse the accumulated response
+    return this.parseResponse({ result: { response: fullResponse } });
   }
 
   private buildPrompt(request: ReviewRequest): string {
